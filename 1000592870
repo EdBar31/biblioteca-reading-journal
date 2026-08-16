@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Biblioteca · Reading Journal</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#8B6BBE">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="leaf-bg"></div>
+
+<!-- ===== HEADER ===== -->
+<header class="app-header">
+  <div class="eyebrow" id="header-eyebrow">📚 Biblioteca</div>
+  <h1 id="header-title">Biblioteca</h1>
+</header>
+
+<!-- ===== INICIO ===== -->
+<main class="view" id="view-home">
+  <div class="card" id="home-greeting-card">
+    <h2 class="display" id="greeting-text">¡Buenos días!</h2>
+    <div class="eyebrow" id="greeting-date"></div>
+  </div>
+
+  <div class="summary-grid" id="home-summary"></div>
+
+  <div id="now-reading-wrap"></div>
+
+  <div class="card" id="today-card">
+    <h3 class="section-title" style="margin-top:0">Lectura de hoy</h3>
+    <div class="summary-grid" id="today-summary"></div>
+  </div>
+
+  <div class="card" id="streak-card">
+    <div class="row">
+      <div class="grow">
+        <div class="eyebrow">Racha</div>
+        <div class="streak" id="streak-text">🔥 0 días consecutivos</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="last-reflection-card" hidden>
+    <h3 class="section-title" style="margin-top:0">Última reflexión</h3>
+    <div id="last-reflection-content"></div>
+  </div>
+</main>
+
+<!-- ===== BIBLIOTECA ===== -->
+<main class="view" id="view-library" hidden>
+  <div class="search-box">
+    <input type="text" id="search-input" placeholder="Buscar libros...">
+  </div>
+  <div class="filters" id="library-filters">
+    <button class="filter-chip active" data-filter="all">Todos</button>
+    <button class="filter-chip" data-filter="quiero_leer">Quiero leer</button>
+    <button class="filter-chip" data-filter="leyendo">Leyendo</button>
+    <button class="filter-chip" data-filter="terminado">Terminados</button>
+    <button class="filter-chip" data-filter="abandonado">Abandonados</button>
+  </div>
+  <div class="book-grid" id="book-grid"></div>
+  <div class="empty-state" id="library-empty" hidden>
+    <div class="icon">📖</div>
+    <div>Aún no tienes libros aquí.<br>Toca "+" para añadir el primero.</div>
+  </div>
+</main>
+
+<!-- ===== FICHA DE LIBRO ===== -->
+<main class="view" id="view-book" hidden>
+  <button class="linkline" id="back-to-library">‹ Biblioteca</button>
+  <div class="card" style="margin-top:12px">
+    <div class="row" style="align-items:flex-start">
+      <div class="reading-cover" id="book-detail-cover" style="width:90px;height:128px;font-size:2rem;"></div>
+      <div class="grow">
+        <h2 class="display" id="book-detail-title" style="font-size:1.5rem"></h2>
+        <div class="eyebrow" id="book-detail-author"></div>
+        <div id="book-detail-stars" class="stars" style="font-size:1.1rem;margin-top:6px"></div>
+      </div>
+    </div>
+    <div class="progress-bar"><div id="book-detail-progress-fill" style="width:0%"></div></div>
+    <div class="row" style="justify-content:space-between">
+      <span id="book-detail-pages" style="font-size:0.85rem;color:var(--texto-secundario)"></span>
+      <span id="book-detail-pct" style="font-size:0.85rem;font-weight:700;color:var(--lila-oscuro)"></span>
+    </div>
+    <button class="btn btn-primary btn-block" id="start-session-btn" style="margin-top:14px">🍅 Iniciar sesión de lectura</button>
+    <button class="btn btn-ghost btn-block" id="edit-book-btn" style="margin-top:8px">Editar libro</button>
+  </div>
+
+  <div class="card">
+    <h3 class="section-title" style="margin-top:0">Información</h3>
+    <div class="stat-row"><span>Fecha de inicio</span><span class="v" id="info-start"></span></div>
+    <div class="stat-row"><span>Fecha de término</span><span class="v" id="info-end"></span></div>
+    <div class="stat-row"><span>Tiempo total leyendo</span><span class="v" id="info-time"></span></div>
+    <div class="stat-row"><span>Pomodoros</span><span class="v" id="info-pomodoros"></span></div>
+    <div class="stat-row"><span>Páginas leídas</span><span class="v" id="info-pages-read"></span></div>
+    <div id="info-eta"></div>
+  </div>
+
+  <div class="card">
+    <h3 class="section-title" style="margin-top:0">Diario de este libro</h3>
+    <div class="btn-row" style="flex-wrap:wrap;gap:8px">
+      <button class="btn btn-secondary" data-jtype="frase" id="jbtn-frase">💜 Frase favorita</button>
+      <button class="btn btn-secondary" data-jtype="reflexion" id="jbtn-reflexion">💭 Reflexión</button>
+      <button class="btn btn-secondary" data-jtype="nota" id="jbtn-nota">📝 Nota</button>
+      <button class="btn btn-secondary" data-jtype="conexion" id="jbtn-conexion">🔗 Conexión</button>
+    </div>
+    <div id="book-journal-entries" style="margin-top:16px"></div>
+  </div>
+</main>
+
+<!-- ===== AÑADIR / EDITAR LIBRO (sheet) ===== -->
+<div class="sheet-overlay" id="book-form-overlay" hidden>
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2 id="book-form-title">Añadir libro</h2>
+      <button class="close-x" id="book-form-close">✕</button>
+    </div>
+
+    <div class="cover-upload" id="cover-upload-btn">
+      <span id="cover-upload-placeholder">📷</span>
+      <img id="cover-upload-img" hidden>
+    </div>
+    <input type="file" id="cover-upload-input" accept="image/*" hidden>
+
+    <div class="field">
+      <label>Título</label>
+      <input type="text" id="f-title" placeholder="Título del libro">
+    </div>
+    <div class="field">
+      <label>Autor</label>
+      <input type="text" id="f-author" placeholder="Autor">
+    </div>
+
+    <div class="field">
+      <label>Formato</label>
+      <div class="chip-select" id="f-format">
+        <button class="chip selected" data-value="fisico">Físico</button>
+        <button class="chip" data-value="electronico">Electrónico</button>
+        <button class="chip" data-value="audio">Audio</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Estado</label>
+      <div class="chip-select" id="f-status">
+        <button class="chip selected" data-value="quiero_leer">Quiero leer</button>
+        <button class="chip" data-value="leyendo">Leyendo</button>
+        <button class="chip" data-value="terminado">Terminado</button>
+        <button class="chip" data-value="abandonado">Abandonado</button>
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label>Fecha de inicio</label>
+        <input type="date" id="f-start-date">
+      </div>
+      <div class="field">
+        <label>Fecha de término</label>
+        <input type="date" id="f-end-date">
+      </div>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label>Páginas totales</label>
+        <input type="number" id="f-total-pages" placeholder="328" min="1">
+      </div>
+      <div class="field">
+        <label>Página actual</label>
+        <input type="number" id="f-current-page" placeholder="0" min="0">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Género (opcional)</label>
+      <input type="text" id="f-genre" placeholder="Ej. Ciencia ficción">
+    </div>
+
+    <div class="field">
+      <label>Calificación</label>
+      <div class="stars" id="f-rating">
+        <span class="star" data-v="1">★</span>
+        <span class="star" data-v="2">★</span>
+        <span class="star" data-v="3">★</span>
+        <span class="star" data-v="4">★</span>
+        <span class="star" data-v="5">★</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Notas iniciales (opcional)</label>
+      <textarea id="f-notes" rows="3" placeholder="Alguna nota antes de empezar..."></textarea>
+    </div>
+
+    <button class="btn btn-primary btn-block" id="book-form-save">Guardar libro</button>
+  </div>
+</div>
+
+<!-- ===== POMODORO ===== -->
+<main class="view" id="view-pomodoro" hidden>
+  <div id="pomodoro-idle">
+    <div class="card" style="text-align:center">
+      <div class="eyebrow">Sesión de lectura para</div>
+      <h2 class="display" id="pomo-book-title">—</h2>
+      <div style="color:var(--texto-secundario);font-size:0.9rem" id="pomo-book-author"></div>
+    </div>
+    <div class="card">
+      <h3 class="section-title" style="margin-top:0">Duración</h3>
+      <div class="chip-select" id="pomo-preset">
+        <button class="chip selected" data-read="25" data-rest="5">25 / 5</button>
+        <button class="chip" data-read="15" data-rest="5">15 / 5</button>
+        <button class="chip" data-read="50" data-rest="10">50 / 10</button>
+        <button class="chip" data-read="custom">Personalizado</button>
+      </div>
+      <div class="field-row" id="pomo-custom-fields" hidden style="margin-top:12px">
+        <div class="field"><label>Lectura (min)</label><input type="number" id="pomo-custom-read" value="25"></div>
+        <div class="field"><label>Descanso (min)</label><input type="number" id="pomo-custom-rest" value="5"></div>
+      </div>
+      <button class="btn btn-primary btn-block" id="pomo-begin" style="margin-top:14px">Comenzar</button>
+    </div>
+  </div>
+
+  <div id="pomodoro-active" hidden>
+    <div class="timer-wrap">
+      <div class="timer-label" id="timer-phase">SESIÓN DE LECTURA</div>
+      <div class="timer-circle">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45" fill="none" stroke="#E9DDF5" stroke-width="6"/>
+          <circle cx="50" cy="50" r="45" fill="none" stroke="#8B6BBE" stroke-width="6"
+            stroke-linecap="round" id="timer-ring" stroke-dasharray="283" stroke-dashoffset="0"
+            transform="rotate(-90 50 50)"/>
+        </svg>
+        <div class="timer-time" id="timer-time">25:00</div>
+      </div>
+      <div class="timer-book">
+        <div class="t" id="timer-book-title"></div>
+        <div class="a" id="timer-book-author"></div>
+        <div class="a" id="timer-book-page"></div>
+      </div>
+      <div class="eyebrow" id="timer-session-count">Sesión 1 de 4</div>
+      <div class="btn-row" style="margin-top:20px">
+        <button class="btn btn-secondary" id="timer-pause">Pausar</button>
+        <button class="btn btn-ghost" id="timer-finish">Terminar sesión</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ===== FINALIZAR SESIÓN (sheet) ===== -->
+<div class="sheet-overlay" id="session-end-overlay" hidden>
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2>¿Hasta qué página llegaste?</h2>
+      <button class="close-x" id="session-end-close">✕</button>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Página inicial</label>
+        <input type="number" id="se-start-page" disabled>
+      </div>
+      <div class="field">
+        <label>Página final</label>
+        <input type="number" id="se-end-page">
+      </div>
+    </div>
+    <div class="eyebrow" id="se-pages-diff" style="margin-bottom:14px"></div>
+
+    <div class="field">
+      <label>¿Cómo te sentiste?</label>
+      <div class="mood-select">
+        <button data-mood="😞">😞</button>
+        <button data-mood="😕">😕</button>
+        <button data-mood="😐">😐</button>
+        <button data-mood="🙂">🙂</button>
+        <button data-mood="😍">😍</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Nota opcional</label>
+      <textarea id="se-note" rows="3" placeholder="Algo que quieras recordar de esta sesión..."></textarea>
+    </div>
+
+    <button class="btn btn-primary btn-block" id="se-save">Guardar sesión</button>
+  </div>
+</div>
+
+<!-- ===== ENTRADA DE DIARIO (sheet) ===== -->
+<div class="sheet-overlay" id="journal-form-overlay" hidden>
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+      <h2 id="journal-form-title">Nueva entrada</h2>
+      <button class="close-x" id="journal-form-close">✕</button>
+    </div>
+    <div class="field" id="jf-book-field">
+      <label>Libro</label>
+      <select id="jf-book"></select>
+    </div>
+    <div class="field" id="jf-page-field">
+      <label>Página (opcional)</label>
+      <input type="number" id="jf-page">
+    </div>
+    <div class="field">
+      <label id="jf-text-label">Texto</label>
+      <textarea id="jf-text" rows="4" placeholder="Escribe aquí..."></textarea>
+    </div>
+    <div class="field" id="jf-favorite-field">
+      <label class="row" style="gap:8px;cursor:pointer">
+        <input type="checkbox" id="jf-favorite" style="width:auto">
+        Marcar como favorita
+      </label>
+    </div>
+    <button class="btn btn-primary btn-block" id="jf-save">Guardar</button>
+  </div>
+</div>
+
+<!-- ===== DIARIO ===== -->
+<main class="view" id="view-journal" hidden>
+  <button class="btn btn-secondary btn-block" id="new-journal-entry-btn" style="margin-bottom:16px">+ Nueva entrada</button>
+  <div id="journal-list"></div>
+  <div class="empty-state" id="journal-empty" hidden>
+    <div class="icon">📓</div>
+    <div>Tu diario está vacío.<br>Registra una frase, nota o reflexión.</div>
+  </div>
+</main>
+
+<!-- ===== ESTADÍSTICAS ===== -->
+<main class="view" id="view-stats" hidden>
+  <div class="card">
+    <h3 class="section-title" style="margin-top:0">General</h3>
+    <div class="stat-row"><span>Libros terminados</span><span class="v" id="stat-finished"></span></div>
+    <div class="stat-row"><span>Páginas leídas</span><span class="v" id="stat-pages"></span></div>
+    <div class="stat-row"><span>Horas de lectura</span><span class="v" id="stat-hours"></span></div>
+    <div class="stat-row"><span>Pomodoros</span><span class="v" id="stat-pomodoros"></span></div>
+    <div class="stat-row"><span>Racha</span><span class="v" id="stat-streak"></span></div>
+    <div class="stat-row"><span>Calificación promedio</span><span class="v" id="stat-rating"></span></div>
+  </div>
+
+  <div class="card">
+    <h3 class="section-title" style="margin-top:0">Páginas leídas por mes</h3>
+    <div class="bar-chart" id="chart-pages" style="margin-bottom:14px"></div>
+  </div>
+
+  <div class="card">
+    <h3 class="section-title" style="margin-top:0">Libros por formato</h3>
+    <div id="stat-by-format"></div>
+  </div>
+
+  <div class="card">
+    <h3 class="section-title" style="margin-top:0">Por libro</h3>
+    <div id="stat-by-book"></div>
+  </div>
+</main>
+
+<!-- ===== NAV INFERIOR ===== -->
+<nav class="bottom-nav">
+  <button class="nav-btn active" data-view="home"><span class="icon">🏠</span>Inicio</button>
+  <button class="nav-btn" data-view="library"><span class="icon">📚</span>Biblioteca</button>
+  <button class="nav-btn" data-view="pomodoro-hub"><span class="icon">🍅</span>Pomodoro</button>
+  <button class="nav-btn" data-view="journal"><span class="icon">📓</span>Diario</button>
+  <button class="nav-btn" data-view="stats"><span class="icon">📊</span>Estadísticas</button>
+</nav>
+
+<button class="fab" id="fab-add-book">+</button>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

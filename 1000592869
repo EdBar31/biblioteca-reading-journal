@@ -1,0 +1,803 @@
+/* ===========================================================
+   Biblioteca · Reading Journal — lógica de la aplicación
+   Persistencia: localStorage. Sin backend, 100% local y offline.
+=========================================================== */
+
+const STORAGE_KEY = "biblioteca_rj_v1";
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+/* ---------- Estado y persistencia ---------- */
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { console.warn("No se pudo leer el estado guardado", e); }
+  return {
+    books: [],
+    sessions: [],       // reading sessions
+    journal: [],         // quotes / reflections / notes / connections
+    paths: [],            // preparado para Reading Paths (futuro)
+    activePomodoro: null  // sesión en curso, si la hay
+  };
+}
+function saveState() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+let state = loadState();
+
+/* ---------- Toast ---------- */
+let toastTimer = null;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
+
+/* ---------- Navegación ---------- */
+const VIEWS = ["home", "library", "book", "pomodoro", "journal", "stats"];
+const HEADER = {
+  home: { eyebrow: "📚 Biblioteca", title: "Biblioteca" },
+  library: { eyebrow: "Tu colección", title: "Biblioteca" },
+  book: { eyebrow: "Ficha del libro", title: "" },
+  pomodoro: { eyebrow: "Concéntrate", title: "Pomodoro" },
+  journal: { eyebrow: "Registra lo que sientes", title: "Diario" },
+  stats: { eyebrow: "Tu recorrido lector", title: "Estadísticas" }
+};
+
+function showView(name, opts = {}) {
+  VIEWS.forEach((v) => { $(`#view-${v}`).hidden = v !== name; });
+  $$(".nav-btn").forEach((b) => b.classList.remove("active"));
+  const navMap = { home: "home", library: "library", book: "library", pomodoro: "pomodoro-hub", journal: "journal", stats: "stats" };
+  const navBtn = $(`.nav-btn[data-view="${navMap[name]}"]`);
+  if (navBtn) navBtn.classList.add("active");
+  const h = HEADER[name];
+  $("#header-eyebrow").textContent = h.eyebrow;
+  $("#header-title").textContent = opts.title || h.title;
+
+  if (name === "home") renderHome();
+  if (name === "library") renderLibrary();
+  if (name === "journal") renderJournal();
+  if (name === "stats") renderStats();
+  if (name === "pomodoro") renderPomodoroHub();
+}
+
+$$(".nav-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const target = btn.dataset.view;
+    if (target === "pomodoro-hub") {
+      currentBookForSession = state.activePomodoro ? getBook(state.activePomodoro.bookId) : null;
+      showView("pomodoro");
+    } else {
+      showView(target);
+    }
+  });
+});
+
+/* ===========================================================
+   INICIO
+=========================================================== */
+function renderHome() {
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 12 ? "¡Buenos días!" : hour < 19 ? "¡Buenas tardes!" : "¡Buenas noches!";
+  $("#greeting-text").textContent = greeting;
+  $("#greeting-date").textContent = now.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+
+  const finished = state.books.filter((b) => b.status === "terminado").length;
+  const reading = state.books.filter((b) => b.status === "leyendo").length;
+  const totalPages = state.sessions.reduce((s, ses) => s + (ses.pages_read || 0), 0);
+  const totalMinutes = Math.round(state.sessions.reduce((s, ses) => s + (ses.duration || 0), 0) / 60);
+  const totalPomodoros = state.sessions.length;
+
+  $("#home-summary").innerHTML = [
+    ["Terminados", finished],
+    ["Leyendo", reading],
+    ["Total libros", state.books.length],
+    ["Páginas leídas", totalPages],
+    ["Min. de lectura", totalMinutes],
+    ["Pomodoros", totalPomodoros]
+  ].map(([label, num]) => `<div class="summary-item"><span class="num">${num}</span><span class="label">${label}</span></div>`).join("");
+
+  // Ahora leyendo
+  const current = state.books.filter((b) => b.status === "leyendo").sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))[0];
+  const wrap = $("#now-reading-wrap");
+  if (current) {
+    const pct = bookPct(current);
+    wrap.innerHTML = `
+      <div class="card">
+        <div class="eyebrow">Ahora leyendo</div>
+        <div class="row" style="margin-top:8px">
+          ${coverHTML(current, 56, 80)}
+          <div class="grow">
+            <div style="font-weight:700">${escapeHTML(current.title)}</div>
+            <div style="color:var(--texto-secundario);font-size:0.85rem">${escapeHTML(current.author || "")}</div>
+            <div class="progress-bar"><div style="width:${pct}%"></div></div>
+            <div style="font-size:0.8rem;color:var(--texto-secundario)">${current.current_page || 0} / ${current.total_pages || 0} páginas · ${pct}%</div>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:14px">
+          <button class="btn btn-secondary" id="home-continue-btn">Continuar lectura</button>
+          <button class="btn btn-primary" id="home-pomodoro-btn">Iniciar Pomodoro</button>
+        </div>
+      </div>`;
+    $("#home-continue-btn").addEventListener("click", () => openBookDetail(current.id));
+    $("#home-pomodoro-btn").addEventListener("click", () => { currentBookForSession = current; showView("pomodoro"); });
+  } else {
+    wrap.innerHTML = `<div class="card empty-state" style="padding:26px 16px">
+      <div class="icon">📖</div>
+      <div>No tienes ningún libro en lectura.<br>Añade uno para empezar.</div>
+    </div>`;
+  }
+
+  // Lectura de hoy
+  const todaySessions = state.sessions.filter((s) => s.date === todayISO());
+  const todayMinutes = Math.round(todaySessions.reduce((s, ses) => s + (ses.duration || 0), 0) / 60);
+  const todayPages = todaySessions.reduce((s, ses) => s + (ses.pages_read || 0), 0);
+  $("#today-summary").innerHTML = [
+    ["Pomodoros", todaySessions.length],
+    ["Minutos", todayMinutes],
+    ["Páginas", todayPages]
+  ].map(([label, num]) => `<div class="summary-item"><span class="num">${num}</span><span class="label">${label}</span></div>`).join("");
+
+  // Racha
+  $("#streak-text").textContent = `🔥 ${computeStreak()} días consecutivos`;
+
+  // Última reflexión
+  const lastReflection = [...state.journal].filter((j) => j.type === "reflexion").sort((a, b) => b.date.localeCompare(a.date))[0];
+  const card = $("#last-reflection-card");
+  if (lastReflection) {
+    card.hidden = false;
+    const book = getBook(lastReflection.book_id);
+    $("#last-reflection-content").innerHTML = `
+      <div style="font-size:0.78rem;color:var(--texto-secundario);margin-bottom:6px">${book ? escapeHTML(book.title) : "General"} · ${lastReflection.date}</div>
+      <blockquote style="margin:0;font-family:'Cormorant Garamond',serif;font-style:italic;font-size:1.1rem">${escapeHTML(lastReflection.text)}</blockquote>`;
+  } else {
+    card.hidden = true;
+  }
+}
+
+function computeStreak() {
+  const days = new Set(state.sessions.map((s) => s.date));
+  if (days.size === 0) return 0;
+  let streak = 0;
+  let cursor = new Date();
+  // Si no ha leído hoy, empezar a contar desde ayer (para no romper la racha antes de que termine el día)
+  if (!days.has(todayISO())) cursor.setDate(cursor.getDate() - 1);
+  while (true) {
+    const iso = cursor.toISOString().slice(0, 10);
+    if (days.has(iso)) {
+      streak++;
+      cursor.setDate(cursor.getDate() - 1);
+    } else break;
+  }
+  return streak;
+}
+
+/* ===========================================================
+   BIBLIOTECA
+=========================================================== */
+let libraryFilter = "all";
+let librarySearch = "";
+
+$("#library-filters").addEventListener("click", (e) => {
+  const btn = e.target.closest(".filter-chip");
+  if (!btn) return;
+  $$(".filter-chip").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  libraryFilter = btn.dataset.filter;
+  renderLibrary();
+});
+$("#search-input").addEventListener("input", (e) => {
+  librarySearch = e.target.value.trim().toLowerCase();
+  renderLibrary();
+});
+
+function renderLibrary() {
+  let books = [...state.books];
+  if (libraryFilter !== "all") books = books.filter((b) => b.status === libraryFilter);
+  if (librarySearch) {
+    books = books.filter((b) =>
+      (b.title || "").toLowerCase().includes(librarySearch) ||
+      (b.author || "").toLowerCase().includes(librarySearch)
+    );
+  }
+  books.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+
+  const grid = $("#book-grid");
+  $("#library-empty").hidden = state.books.length !== 0;
+  grid.innerHTML = books.map((b) => {
+    const pct = bookPct(b);
+    return `<button class="book-tile" data-id="${b.id}">
+      <div class="cover">
+        <span class="status-dot" title="${statusLabel(b.status)}"></span>
+        ${b.cover ? `<img src="${b.cover}" alt="">` : "📖"}
+      </div>
+      <div class="title">${escapeHTML(b.title)}</div>
+      <div class="author">${escapeHTML(b.author || "")}</div>
+      ${b.status === "leyendo" ? `<div class="pct">${pct}%</div>` : ""}
+    </button>`;
+  }).join("");
+  $$(".book-tile", grid).forEach((tile) => {
+    tile.addEventListener("click", () => openBookDetail(tile.dataset.id));
+  });
+}
+
+function statusLabel(s) {
+  return { quiero_leer: "Quiero leer", leyendo: "Leyendo", terminado: "Terminado", abandonado: "Abandonado" }[s] || s;
+}
+function bookPct(b) {
+  if (!b.total_pages) return 0;
+  return Math.min(100, Math.round(((b.current_page || 0) / b.total_pages) * 100 * 10) / 10);
+}
+function coverHTML(b, w, h) {
+  return `<div class="reading-cover" style="width:${w}px;height:${h}px">${b.cover ? `<img src="${b.cover}" alt="">` : "📖"}</div>`;
+}
+function getBook(id) { return state.books.find((b) => b.id === id); }
+function escapeHTML(str) {
+  return (str || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+$("#fab-add-book").addEventListener("click", () => openBookForm());
+$("#back-to-library").addEventListener("click", () => showView("library"));
+
+/* ===========================================================
+   FORMULARIO AÑADIR / EDITAR LIBRO
+=========================================================== */
+let editingBookId = null;
+let formCoverData = null;
+
+function openBookForm(book = null) {
+  editingBookId = book ? book.id : null;
+  formCoverData = book ? book.cover || null : null;
+  $("#book-form-title").textContent = book ? "Editar libro" : "Añadir libro";
+  $("#f-title").value = book?.title || "";
+  $("#f-author").value = book?.author || "";
+  $("#f-start-date").value = book?.start_date || "";
+  $("#f-end-date").value = book?.finish_date || "";
+  $("#f-total-pages").value = book?.total_pages || "";
+  $("#f-current-page").value = book?.current_page || 0;
+  $("#f-genre").value = book?.genre || "";
+  $("#f-notes").value = book?.initial_notes || "";
+  setChipGroup("#f-format", book?.format || "fisico");
+  setChipGroup("#f-status", book?.status || "quiero_leer");
+  setStars("#f-rating", book?.rating || 0);
+  updateCoverPreview();
+  $("#book-form-overlay").hidden = false;
+}
+$("#book-form-close").addEventListener("click", () => { $("#book-form-overlay").hidden = true; });
+
+function setChipGroup(sel, value) {
+  $$(`${sel} .chip`).forEach((c) => c.classList.toggle("selected", c.dataset.value === value));
+}
+function getChipValue(sel) {
+  const active = $(`${sel} .chip.selected`);
+  return active ? active.dataset.value : null;
+}
+$$(".chip-select").forEach((group) => {
+  if (group.id === "pomo-preset") return; // manejado aparte
+  group.addEventListener("click", (e) => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    $$(".chip", group).forEach((c) => c.classList.remove("selected"));
+    chip.classList.add("selected");
+  });
+});
+
+function setStars(sel, value) {
+  $$(`${sel} .star`).forEach((s) => s.classList.toggle("filled", Number(s.dataset.v) <= value));
+  document.querySelector(sel).dataset.value = value;
+}
+$("#f-rating").addEventListener("click", (e) => {
+  const star = e.target.closest(".star");
+  if (!star) return;
+  setStars("#f-rating", Number(star.dataset.v));
+});
+
+$("#cover-upload-btn").addEventListener("click", () => $("#cover-upload-input").click());
+$("#cover-upload-input").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { formCoverData = reader.result; updateCoverPreview(); };
+  reader.readAsDataURL(file);
+});
+function updateCoverPreview() {
+  if (formCoverData) {
+    $("#cover-upload-img").src = formCoverData;
+    $("#cover-upload-img").hidden = false;
+    $("#cover-upload-placeholder").hidden = true;
+  } else {
+    $("#cover-upload-img").hidden = true;
+    $("#cover-upload-placeholder").hidden = false;
+  }
+}
+
+$("#book-form-save").addEventListener("click", () => {
+  const title = $("#f-title").value.trim();
+  if (!title) { toast("Ponle un título al libro"); return; }
+  const totalPages = Number($("#f-total-pages").value) || 0;
+  let currentPage = Number($("#f-current-page").value) || 0;
+  if (totalPages && currentPage > totalPages) currentPage = totalPages;
+  let status = getChipValue("#f-status");
+
+  const now = Date.now();
+  const data = {
+    title,
+    author: $("#f-author").value.trim(),
+    cover: formCoverData,
+    format: getChipValue("#f-format"),
+    status,
+    start_date: $("#f-start-date").value || null,
+    finish_date: $("#f-end-date").value || null,
+    total_pages: totalPages,
+    current_page: currentPage,
+    genre: $("#f-genre").value.trim(),
+    rating: Number($("#f-rating").dataset.value) || 0,
+    initial_notes: $("#f-notes").value.trim(),
+    updated_at: now
+  };
+
+  // Auto-completar si llegó al final
+  if (totalPages && currentPage >= totalPages && totalPages > 0) {
+    data.status = "terminado";
+    if (!data.finish_date) data.finish_date = todayISO();
+  }
+
+  if (editingBookId) {
+    const book = getBook(editingBookId);
+    Object.assign(book, data);
+    toast("Libro actualizado");
+  } else {
+    state.books.push({ id: uid(), created_at: now, ...data });
+    toast("Libro añadido a tu biblioteca");
+  }
+  saveState();
+  $("#book-form-overlay").hidden = true;
+  if (editingBookId) openBookDetail(editingBookId); else showView("library");
+});
+
+/* ===========================================================
+   FICHA DE LIBRO
+=========================================================== */
+let currentBookId = null;
+
+function openBookDetail(id) {
+  currentBookId = id;
+  const b = getBook(id);
+  if (!b) return;
+  showView("book", { title: b.title });
+  $("#book-detail-cover").innerHTML = b.cover ? `<img src="${b.cover}" style="width:100%;height:100%;object-fit:cover;border-radius:8px">` : "📖";
+  $("#book-detail-title").textContent = b.title;
+  $("#book-detail-author").textContent = b.author || "";
+  $("#book-detail-stars").innerHTML = [1, 2, 3, 4, 5].map((n) => `<span class="star${n <= b.rating ? " filled" : ""}">★</span>`).join("");
+  const pct = bookPct(b);
+  $("#book-detail-progress-fill").style.width = pct + "%";
+  $("#book-detail-pages").textContent = `${b.current_page || 0} / ${b.total_pages || 0} páginas`;
+  $("#book-detail-pct").textContent = pct + "%";
+  $("#info-start").textContent = b.start_date || "—";
+  $("#info-end").textContent = b.finish_date || "—";
+  const bookSessions = state.sessions.filter((s) => s.book_id === id);
+  const totalMin = Math.round(bookSessions.reduce((s, ses) => s + (ses.duration || 0), 0) / 60);
+  $("#info-time").textContent = totalMin ? `${totalMin} min` : "—";
+  $("#info-pomodoros").textContent = bookSessions.length;
+  $("#info-pages-read").textContent = bookSessions.reduce((s, ses) => s + (ses.pages_read || 0), 0);
+
+  // ETA
+  const etaEl = $("#info-eta");
+  if (b.status === "leyendo" && b.total_pages && bookSessions.length > 0) {
+    const remaining = Math.max(0, b.total_pages - (b.current_page || 0));
+    const avgPagesPerSession = bookSessions.reduce((s, ses) => s + (ses.pages_read || 0), 0) / bookSessions.length;
+    const avgMinPerSession = bookSessions.reduce((s, ses) => s + (ses.duration || 0), 0) / bookSessions.length / 60;
+    if (avgPagesPerSession > 0) {
+      const sessionsNeeded = Math.ceil(remaining / avgPagesPerSession);
+      const minutesLeft = Math.round(sessionsNeeded * avgMinPerSession);
+      const h = Math.floor(minutesLeft / 60), m = minutesLeft % 60;
+      etaEl.innerHTML = `<div class="stat-row"><span>⏳ Tiempo estimado restante</span><span class="v">${h}h ${m}min</span></div>
+        <div class="stat-row"><span>🍅 Pomodoros aproximados</span><span class="v">${sessionsNeeded}</span></div>`;
+    } else etaEl.innerHTML = "";
+  } else etaEl.innerHTML = "";
+
+  $("#start-session-btn").onclick = () => { currentBookForSession = b; showView("pomodoro"); };
+  $("#edit-book-btn").onclick = () => openBookForm(b);
+
+  renderBookJournal(id);
+
+  $$("#view-book [data-jtype]").forEach((btn) => {
+    btn.onclick = () => openJournalForm(btn.dataset.jtype, id);
+  });
+}
+
+function renderBookJournal(bookId) {
+  const entries = state.journal.filter((j) => j.book_id === bookId).sort((a, b) => b.date.localeCompare(a.date));
+  const wrap = $("#book-journal-entries");
+  if (entries.length === 0) {
+    wrap.innerHTML = `<div style="color:var(--texto-secundario);font-size:0.88rem">Aún no hay entradas para este libro.</div>`;
+    return;
+  }
+  wrap.innerHTML = entries.map(journalEntryHTML).join("");
+}
+
+const TYPE_LABEL = { frase: "💜 Frase", reflexion: "💭 Reflexión", nota: "📝 Nota", conexion: "🔗 Conexión" };
+function journalEntryHTML(j) {
+  const book = getBook(j.book_id);
+  return `<div class="journal-entry">
+    <div class="meta"><span class="type-badge">${TYPE_LABEL[j.type] || j.type}</span>${j.date}${book ? " · " + escapeHTML(book.title) : ""}${j.page ? " · p." + j.page : ""}${j.favorite ? " · ⭐" : ""}</div>
+    <blockquote>${escapeHTML(j.text)}</blockquote>
+  </div>`;
+}
+
+/* ===========================================================
+   DIARIO (general)
+=========================================================== */
+function renderJournal() {
+  const entries = [...state.journal].sort((a, b) => b.date.localeCompare(a.date));
+  $("#journal-empty").hidden = entries.length !== 0;
+  $("#journal-list").innerHTML = entries.map(journalEntryHTML).join("");
+}
+$("#new-journal-entry-btn").addEventListener("click", () => openJournalForm("nota", null));
+
+let journalFormType = "nota";
+function openJournalForm(type, bookId) {
+  journalFormType = type;
+  const labels = { frase: "Frase favorita", reflexion: "Reflexión", nota: "Nota", conexion: "Conexión" };
+  $("#journal-form-title").textContent = labels[type] || "Nueva entrada";
+  $("#jf-text-label").textContent = type === "frase" ? "Texto de la frase" : type === "reflexion" ? "¿Qué me hizo sentir? ¿Con qué me quedo?" : "Texto";
+  $("#jf-text").value = "";
+  $("#jf-page").value = "";
+  $("#jf-favorite").checked = false;
+  $("#jf-favorite-field").hidden = type !== "frase";
+  $("#jf-page-field").hidden = type === "reflexion" || type === "conexion";
+
+  const select = $("#jf-book");
+  select.innerHTML = `<option value="">General (sin libro)</option>` + state.books
+    .map((b) => `<option value="${b.id}">${escapeHTML(b.title)}</option>`).join("");
+  select.value = bookId || "";
+  $("#journal-form-overlay").hidden = false;
+  $("#jf-text").focus();
+}
+$("#journal-form-close").addEventListener("click", () => { $("#journal-form-overlay").hidden = true; });
+$("#jf-save").addEventListener("click", () => {
+  const text = $("#jf-text").value.trim();
+  if (!text) { toast("Escribe algo antes de guardar"); return; }
+  state.journal.push({
+    id: uid(),
+    book_id: $("#jf-book").value || null,
+    type: journalFormType,
+    text,
+    page: $("#jf-page").value ? Number($("#jf-page").value) : null,
+    favorite: $("#jf-favorite").checked,
+    date: todayISO()
+  });
+  saveState();
+  $("#journal-form-overlay").hidden = true;
+  toast("Entrada guardada");
+  if (!$("#view-book").hidden && currentBookId) renderBookJournal(currentBookId);
+  if (!$("#view-journal").hidden) renderJournal();
+  if (!$("#view-home").hidden) renderHome();
+});
+
+/* ===========================================================
+   POMODORO
+=========================================================== */
+let currentBookForSession = null;
+let timerInterval = null;
+let timerState = null; // { phase, totalSeconds, remaining, running, readMin, restMin, sessionIndex, startPage, bookId }
+
+function renderPomodoroHub() {
+  if (state.activePomodoro) {
+    resumeActiveTimer();
+    return;
+  }
+  $("#pomodoro-idle").hidden = false;
+  $("#pomodoro-active").hidden = true;
+
+  const b = currentBookForSession || state.books.filter((x) => x.status === "leyendo").sort((a, c) => (c.updated_at || 0) - (a.updated_at || 0))[0];
+  if (!b) {
+    $("#pomo-book-title").textContent = "Elige un libro primero";
+    $("#pomo-book-author").textContent = "";
+    $("#pomo-begin").disabled = true;
+    return;
+  }
+  currentBookForSession = b;
+  $("#pomo-begin").disabled = false;
+  $("#pomo-book-title").textContent = b.title;
+  $("#pomo-book-author").textContent = b.author || "";
+}
+
+$$("#pomo-preset .chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    $$("#pomo-preset .chip").forEach((c) => c.classList.remove("selected"));
+    chip.classList.add("selected");
+    $("#pomo-custom-fields").hidden = chip.dataset.read !== "custom";
+  });
+});
+
+$("#pomo-begin").addEventListener("click", () => {
+  const selected = $("#pomo-preset .chip.selected");
+  let readMin, restMin;
+  if (selected.dataset.read === "custom") {
+    readMin = Number($("#pomo-custom-read").value) || 25;
+    restMin = Number($("#pomo-custom-rest").value) || 5;
+  } else {
+    readMin = Number(selected.dataset.read);
+    restMin = Number(selected.dataset.rest);
+  }
+  startPomodoro(currentBookForSession.id, readMin, restMin);
+});
+
+function startPomodoro(bookId, readMin, restMin) {
+  const book = getBook(bookId);
+  state.activePomodoro = {
+    bookId,
+    phase: "lectura",
+    readMin, restMin,
+    sessionIndex: 1,
+    startPage: book.current_page || 0,
+    phaseEndsAt: Date.now() + readMin * 60 * 1000,
+    phaseTotalSeconds: readMin * 60,
+    paused: false,
+    pausedRemaining: null
+  };
+  saveState();
+  resumeActiveTimer();
+}
+
+function resumeActiveTimer() {
+  $("#pomodoro-idle").hidden = true;
+  $("#pomodoro-active").hidden = false;
+  const ap = state.activePomodoro;
+  const book = getBook(ap.bookId);
+  $("#timer-book-title").textContent = book?.title || "";
+  $("#timer-book-author").textContent = book?.author || "";
+  $("#timer-book-page").textContent = `Página ${book?.current_page || 0}`;
+  $("#timer-session-count").textContent = `Sesión ${ap.sessionIndex} de 4`;
+  $("#timer-phase").textContent = ap.phase === "lectura" ? "SESIÓN DE LECTURA" : "DESCANSO";
+  $("#timer-pause").textContent = ap.paused ? "Continuar" : "Pausar";
+
+  clearInterval(timerInterval);
+  timerInterval = setInterval(tickTimer, 250);
+  tickTimer();
+}
+
+function tickTimer() {
+  const ap = state.activePomodoro;
+  if (!ap) return;
+  let remainingMs;
+  if (ap.paused) {
+    remainingMs = ap.pausedRemaining;
+  } else {
+    remainingMs = ap.phaseEndsAt - Date.now();
+    if (remainingMs <= 0) {
+      handlePhaseComplete();
+      return;
+    }
+  }
+  const remainingSec = Math.max(0, Math.round(remainingMs / 1000));
+  const mm = String(Math.floor(remainingSec / 60)).padStart(2, "0");
+  const ss = String(remainingSec % 60).padStart(2, "0");
+  $("#timer-time").textContent = `${mm}:${ss}`;
+  const pct = 1 - remainingSec / ap.phaseTotalSeconds;
+  const circumference = 283;
+  $("#timer-ring").style.strokeDashoffset = circumference * pct;
+}
+
+function handlePhaseComplete() {
+  const ap = state.activePomodoro;
+  if (ap.phase === "lectura") {
+    // Terminó fase de lectura -> abrir sheet para registrar página
+    clearInterval(timerInterval);
+    openSessionEnd(ap, true);
+  } else {
+    // Terminó descanso -> siguiente sesión de lectura
+    const nextIndex = ap.sessionIndex >= 4 ? 1 : ap.sessionIndex + 1;
+    const isLongBreakNext = false;
+    ap.phase = "lectura";
+    ap.sessionIndex = nextIndex;
+    ap.readMin = ap.readMin; // se mantiene
+    ap.phaseTotalSeconds = ap.readMin * 60;
+    ap.phaseEndsAt = Date.now() + ap.readMin * 60 * 1000;
+    ap.startPage = getBook(ap.bookId)?.current_page || 0;
+    saveState();
+    resumeActiveTimer();
+  }
+}
+
+$("#timer-pause").addEventListener("click", () => {
+  const ap = state.activePomodoro;
+  if (!ap) return;
+  if (ap.paused) {
+    ap.phaseEndsAt = Date.now() + ap.pausedRemaining;
+    ap.paused = false;
+  } else {
+    ap.pausedRemaining = ap.phaseEndsAt - Date.now();
+    ap.paused = true;
+  }
+  saveState();
+  $("#timer-pause").textContent = ap.paused ? "Continuar" : "Pausar";
+});
+
+$("#timer-finish").addEventListener("click", () => {
+  const ap = state.activePomodoro;
+  if (!ap) return;
+  clearInterval(timerInterval);
+  if (ap.phase === "lectura") {
+    openSessionEnd(ap, false);
+  } else {
+    state.activePomodoro = null;
+    saveState();
+    showView("home");
+  }
+});
+
+/* ---------- Finalizar sesión de lectura ---------- */
+let sessionEndCtx = null;
+function openSessionEnd(ap, autoCompleted) {
+  sessionEndCtx = { ap, autoCompleted };
+  const book = getBook(ap.bookId);
+  $("#se-start-page").value = ap.startPage;
+  $("#se-end-page").value = book?.current_page || ap.startPage;
+  $("#se-pages-diff").textContent = "";
+  $$(".mood-select button").forEach((b) => b.classList.remove("selected"));
+  $("#se-note").value = "";
+  $("#session-end-overlay").hidden = false;
+  updatePagesDiff();
+}
+$("#se-end-page").addEventListener("input", updatePagesDiff);
+function updatePagesDiff() {
+  const start = Number($("#se-start-page").value) || 0;
+  const end = Number($("#se-end-page").value) || 0;
+  const diff = end - start;
+  $("#se-pages-diff").textContent = diff >= 0 ? `+${diff} páginas` : "";
+}
+$$(".mood-select button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $$(".mood-select button").forEach((b) => b.classList.remove("selected"));
+    btn.classList.add("selected");
+  });
+});
+$("#session-end-close").addEventListener("click", () => {
+  // Cerrar sin guardar cancela la sesión activa (evita estados huérfanos)
+  $("#session-end-overlay").hidden = true;
+});
+
+$("#se-save").addEventListener("click", () => {
+  const { ap } = sessionEndCtx;
+  const book = getBook(ap.bookId);
+  const startPage = Number($("#se-start-page").value) || 0;
+  let endPage = Number($("#se-end-page").value) || startPage;
+  if (book.total_pages && endPage > book.total_pages) endPage = book.total_pages;
+  const pagesRead = Math.max(0, endPage - startPage);
+  const moodBtn = $(".mood-select button.selected");
+  const mood = moodBtn ? moodBtn.dataset.mood : null;
+  const note = $("#se-note").value.trim();
+  const durationSeconds = ap.phaseTotalSeconds - Math.max(0, Math.round((ap.paused ? ap.pausedRemaining : (ap.phaseEndsAt - Date.now())) / 1000));
+
+  state.sessions.push({
+    id: uid(),
+    book_id: ap.bookId,
+    date: todayISO(),
+    start_time: Date.now(),
+    duration: Math.max(durationSeconds, ap.phaseTotalSeconds > 0 ? 0 : 0) || ap.phaseTotalSeconds,
+    start_page: startPage,
+    end_page: endPage,
+    pages_read: pagesRead,
+    mood,
+    note,
+    session_type: "lectura"
+  });
+
+  book.current_page = endPage;
+  book.updated_at = Date.now();
+  if (book.status === "quiero_leer") { book.status = "leyendo"; if (!book.start_date) book.start_date = todayISO(); }
+  if (book.total_pages && endPage >= book.total_pages) {
+    book.status = "terminado";
+    book.finish_date = todayISO();
+  }
+  if (note) {
+    state.journal.push({ id: uid(), book_id: ap.bookId, type: "nota", text: note, page: endPage, favorite: false, date: todayISO() });
+  }
+
+  saveState();
+  $("#session-end-overlay").hidden = true;
+  toast(`Sesión guardada: +${pagesRead} páginas`);
+
+  if (book.status === "terminado") {
+    state.activePomodoro = null;
+    saveState();
+    toast(`🎉 ¡Terminaste "${book.title}"!`);
+    showView("book");
+    openBookDetail(book.id);
+    return;
+  }
+
+  // Pasar a descanso
+  const isLongBreak = ap.sessionIndex >= 4;
+  const restMin = isLongBreak ? Math.max(ap.restMin, 15) : ap.restMin;
+  ap.phase = "descanso";
+  ap.phaseTotalSeconds = restMin * 60;
+  ap.phaseEndsAt = Date.now() + restMin * 60 * 1000;
+  ap.paused = false;
+  saveState();
+  resumeActiveTimer();
+});
+
+/* ===========================================================
+   ESTADÍSTICAS
+=========================================================== */
+function renderStats() {
+  const finished = state.books.filter((b) => b.status === "terminado").length;
+  const totalPages = state.sessions.reduce((s, ses) => s + (ses.pages_read || 0), 0);
+  const totalHours = (state.sessions.reduce((s, ses) => s + (ses.duration || 0), 0) / 3600).toFixed(1);
+  const rated = state.books.filter((b) => b.rating);
+  const avgRating = rated.length ? (rated.reduce((s, b) => s + b.rating, 0) / rated.length).toFixed(1) : "—";
+
+  $("#stat-finished").textContent = finished;
+  $("#stat-pages").textContent = totalPages;
+  $("#stat-hours").textContent = totalHours + " h";
+  $("#stat-pomodoros").textContent = state.sessions.length;
+  $("#stat-streak").textContent = `🔥 ${computeStreak()} días`;
+  $("#stat-rating").textContent = avgRating === "—" ? "—" : "★ " + avgRating;
+
+  // Gráfica: páginas por mes (últimos 6 meses)
+  const months = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, label: d.toLocaleDateString("es-MX", { month: "short" }) });
+  }
+  const pagesByMonth = months.map((m) => state.sessions.filter((s) => s.date.startsWith(m.key)).reduce((sum, s) => sum + (s.pages_read || 0), 0));
+  const maxPages = Math.max(1, ...pagesByMonth);
+  $("#chart-pages").innerHTML = months.map((m, i) => {
+    const h = Math.round((pagesByMonth[i] / maxPages) * 100);
+    return `<div class="bar" style="height:100%"><div class="fill" style="height:${h}%"></div><div class="lbl">${m.label}</div></div>`;
+  }).join("");
+
+  // Por formato
+  const formats = { fisico: "Físico", electronico: "Electrónico", audio: "Audio" };
+  const byFormat = Object.entries(formats).map(([key, label]) => {
+    const count = state.books.filter((b) => b.format === key).length;
+    return `<div class="stat-row"><span>${label}</span><span class="v">${count}</span></div>`;
+  }).join("");
+  $("#stat-by-format").innerHTML = byFormat || `<div style="color:var(--texto-secundario);font-size:0.85rem">Sin datos aún.</div>`;
+
+  // Por libro
+  const withSessions = state.books.filter((b) => state.sessions.some((s) => s.book_id === b.id));
+  if (withSessions.length === 0) {
+    $("#stat-by-book").innerHTML = `<div style="color:var(--texto-secundario);font-size:0.85rem">Aún no hay sesiones registradas.</div>`;
+  } else {
+    $("#stat-by-book").innerHTML = withSessions.map((b) => {
+      const s = state.sessions.filter((x) => x.book_id === b.id);
+      const time = Math.round(s.reduce((sum, x) => sum + (x.duration || 0), 0) / 60);
+      const pages = s.reduce((sum, x) => sum + (x.pages_read || 0), 0);
+      const avg = (pages / s.length).toFixed(1);
+      return `<div style="margin-bottom:14px">
+        <div style="font-weight:700;margin-bottom:4px">${escapeHTML(b.title)}</div>
+        <div class="stat-row"><span>Tiempo total</span><span class="v">${time} min</span></div>
+        <div class="stat-row"><span>Sesiones</span><span class="v">${s.length}</span></div>
+        <div class="stat-row"><span>Páginas</span><span class="v">${pages}</span></div>
+        <div class="stat-row"><span>Promedio pág./sesión</span><span class="v">${avg}</span></div>
+        <div class="stat-row"><span>Progreso</span><span class="v">${bookPct(b)}%</span></div>
+      </div>`;
+    }).join("");
+  }
+}
+
+/* ===========================================================
+   Inicio de la app
+=========================================================== */
+window.addEventListener("DOMContentLoaded", () => {
+  showView("home");
+  if (state.activePomodoro) {
+    currentBookForSession = getBook(state.activePomodoro.bookId);
+  }
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("service-worker.js").catch(() => {});
+  }
+});
